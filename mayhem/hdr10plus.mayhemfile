@@ -4,4 +4,3 @@ target: hdr10plus
 cmds:
   - cmd: /hdr10plus_tool --verify extract --input fuzz.hevc -o /dev/null
     filepath: fuzz.hevc
-  - cmd: /hdr10plus_tool --verify extract --input - -o /dev/null
