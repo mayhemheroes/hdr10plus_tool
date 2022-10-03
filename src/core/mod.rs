@@ -1,11 +1,15 @@
-use std::{convert::TryInto, fs::File, path::Path};
+use std::{fs::File, path::Path};
 
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 use thiserror::Error;
 
-use hevc_parser::hevc::{SeiMessage, USER_DATA_REGISTERED_ITU_T_35};
+use bitvec_helpers::bitslice_reader::BitSliceReader;
+use hevc_parser::hevc::{NALUnit, SeiMessage, NAL_SEI_PREFIX, USER_DATA_REGISTERED_ITU_T_35};
 use hevc_parser::io::IoFormat;
+use hevc_parser::utils::{
+    add_start_code_emulation_prevention_3_byte, clear_start_code_emulation_prevention_3_byte,
+};
 
 pub mod parser;
 
@@ -40,27 +44,29 @@ pub fn initialize_progress_bar(format: &IoFormat, input: &Path) -> Result<Progre
     Ok(pb)
 }
 
-pub fn is_st2094_40_sei(sei_payload: &[u8], validate: bool) -> Result<bool> {
-    if sei_payload.len() >= 4 {
-        let sei = SeiMessage::from_bytes(sei_payload)?;
+pub fn st2094_40_sei_msg(sei_payload: &[u8], validate: bool) -> Result<Option<SeiMessage>> {
+    let sei_payload = clear_start_code_emulation_prevention_3_byte(sei_payload);
 
-        if sei.payload_type == USER_DATA_REGISTERED_ITU_T_35 {
-            // FIXME: Not sure why 4 bytes..
-            let itu_t35_bytes = &sei_payload[4..];
+    let res = if sei_payload.len() >= 4 {
+        let sei = SeiMessage::parse_sei_rbsp(&sei_payload)?;
 
-            if itu_t35_bytes.len() >= 7 {
-                let itu_t_t35_country_code = itu_t35_bytes[0];
-                let itu_t_t35_terminal_provider_code =
-                    u16::from_be_bytes(itu_t35_bytes[1..3].try_into()?);
-                let itu_t_t35_terminal_provider_oriented_code =
-                    u16::from_be_bytes(itu_t35_bytes[3..5].try_into()?);
+        sei.into_iter().find(|msg| {
+            if msg.payload_type == USER_DATA_REGISTERED_ITU_T_35 && msg.payload_size >= 7 {
+                let start = msg.payload_offset;
+                let end = start + msg.payload_size;
+
+                let mut reader = BitSliceReader::new(&sei_payload[start..end]);
+
+                let itu_t_t35_country_code = reader.get_n::<u8>(8).unwrap();
+                let itu_t_t35_terminal_provider_code = reader.get_n::<u16>(16).unwrap();
+                let itu_t_t35_terminal_provider_oriented_code = reader.get_n::<u16>(16).unwrap();
 
                 if itu_t_t35_country_code == 0xB5
                     && itu_t_t35_terminal_provider_code == 0x003C
                     && itu_t_t35_terminal_provider_oriented_code == 0x0001
                 {
-                    let application_identifier = itu_t35_bytes[5];
-                    let application_version = itu_t35_bytes[6];
+                    let application_identifier = reader.get_n::<u8>(8).unwrap();
+                    let application_version = reader.get_n::<u8>(8).unwrap();
 
                     let valid_version = if validate {
                         application_version == 1
@@ -69,12 +75,51 @@ pub fn is_st2094_40_sei(sei_payload: &[u8], validate: bool) -> Result<bool> {
                     };
 
                     if application_identifier == 4 && valid_version {
-                        return Ok(true);
+                        return true;
                     }
                 }
             }
+
+            false
+        })
+    } else {
+        None
+    };
+
+    Ok(res)
+}
+
+// Returns Some when the SEI needs to be written
+// Otherwise, the NALU only contains one SEI message, and can be dropped
+pub fn prefix_sei_removed_hdr10plus_nalu(
+    chunk: &[u8],
+    nal: &NALUnit,
+) -> Result<(bool, Option<Vec<u8>>)> {
+    let (st2094_40_msg, payload) = if nal.nal_type == NAL_SEI_PREFIX {
+        let sei_payload = clear_start_code_emulation_prevention_3_byte(&chunk[nal.start..nal.end]);
+        let msg = st2094_40_sei_msg(&sei_payload, false)?;
+
+        (msg, Some(sei_payload))
+    } else {
+        (None, None)
+    };
+
+    let has_st2094_40 = st2094_40_msg.is_some();
+
+    if let (Some(msg), Some(mut payload)) = (st2094_40_msg, payload) {
+        let messages = SeiMessage::parse_sei_rbsp(&payload)?;
+
+        // Only remove ST2094-40 message if there are others
+        if messages.len() > 1 {
+            let start = msg.msg_offset;
+            let end = msg.payload_offset + msg.payload_size;
+
+            payload.drain(start..end);
+            add_start_code_emulation_prevention_3_byte(&mut payload);
+
+            return Ok((true, Some(payload)));
         }
     }
 
-    Ok(false)
+    Ok((has_st2094_40, None))
 }
