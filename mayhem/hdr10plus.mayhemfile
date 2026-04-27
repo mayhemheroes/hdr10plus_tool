@@ -1,0 +1,8 @@
+project: hdr10plus
+target: hdr10plus
+
+cmds:
+  - cmd: /hdr10plus_tool --verify extract --input fuzz.hevc -o /dev/null
+    filepath: fuzz.hevc
+    env:
+      DISABLE_SMOKETEST: '1'
