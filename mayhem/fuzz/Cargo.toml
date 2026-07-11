@@ -1,0 +1,24 @@
+[package]
+name = "hdr10plus-mayhem-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+anyhow = "1.0.102"
+hdr10plus = { path = "../../hdr10plus", default-features = false }
+hevc_parser = { version = "0.6.11", features = ["hevc_io"] }
+
+[[bin]]
+name = "hdr10plus"
+path = "fuzz_targets/hdr10plus.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

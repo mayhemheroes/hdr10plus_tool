@@ -1,0 +1,9 @@
+project: hdr10plus
+target: hdr10plus
+
+cmds:
+  - cmd: /mayhem/hdr10plus-parse
+
+testsuite:
+  - https://$MAYHEM_DOMAIN/$MAYHEM_PROJECT/$MAYHEM_TARGET/testsuite.tar
+  - file://mayhem/hdr10plus/testsuite
